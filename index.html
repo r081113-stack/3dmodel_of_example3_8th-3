@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lagrange Multiplier Visualizer: z = x² + y², x + y = k</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: #f9f9fb; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; overflow: hidden; }
+    #container { position: relative; width: 90vw; height: 85vh; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); overflow: hidden; display: flex; flex-direction: column; }
+    #canvas-container { flex: 1; width: 100%; min-height: 0; position: relative; }
+    .info-bar { display: flex; justify-content: center; align-items: center; gap: 25px; padding: 12px; background: #ffffff; border-top: 1px solid #f0f0f0; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; }
+    .info-item { text-align: center; }
+    .info-label { font-size: 11px; color: #888; font-weight: 600; letter-spacing: 1px; margin-bottom: 2px; }
+    .info-val { font-size: 15px; font-weight: bold; color: #222; }
+    .control-panel { display: flex; justify-content: center; align-items: center; gap: 30px; padding: 12px; background: #ffffff; flex-wrap: wrap; }
+    .control-group { display: flex; align-items: center; gap: 12px; }
+    .control-label { font-size: 14px; color: #444; font-weight: 500; }
+    input[type="range"] { width: 160px; accent-color: #222; }
+    .num-box { background: #f4f4f6; padding: 6px 16px; border-radius: 8px; font-size: 14px; font-weight: bold; color: #333; min-width: 50px; text-align: center; }
+    label.toggle { display: flex; align-items: center; gap: 6px; font-size: 14px; color: #444; cursor: pointer; }
+    button#reset-view { font-size: 13px; padding: 6px 14px; border: 1px solid #ddd; border-radius: 8px; background: #f4f4f6; cursor: pointer; }
+    button#reset-view:hover { background: #eaeaee; }
+    .legend { position: absolute; top: 12px; left: 16px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; color: #444; background: rgba(255,255,255,0.85); padding: 8px 12px; border-radius: 8px; pointer-events: none; }
+    .legend-item { display: flex; align-items: center; gap: 8px; }
+    .legend-line { width: 22px; height: 0; border-top: 3px solid; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+<div id="container">
+  <div id="canvas-container">
+    <div class="legend">
+      <div class="legend-item"><span class="legend-line" style="border-color:#1a9c6b"></span>f(x,y) の等高線（同心円）</div>
+      <div class="legend-item"><span class="legend-line" style="border-color:#1976d2; border-top-style:dashed"></span>制約 x + y = k（xy平面上）</div>
+      <div class="legend-item"><span class="legend-line" style="border-color:#d32f2f"></span>曲面と制約平面の交線</div>
+    </div>
+  </div>
+  <div class="info-bar">
+    <div class="info-item">
+      <div class="info-label">OBJECTIVE f(x,y)</div>
+      <div class="info-val">x² + y²</div>
+    </div>
+    <div style="width: 1px; height: 24px; background: #eee;"></div>
+    <div class="info-item">
+      <div class="info-label">CONSTRAINT g(x,y)</div>
+      <div class="info-val" id="val-constraint">x + y = 2.0</div>
+    </div>
+    <div style="width: 1px; height: 24px; background: #eee;"></div>
+    <div class="info-item">
+      <div class="info-label">OPTIMAL POINT (a, b)</div>
+      <div class="info-val" id="val-opt-pt">(1.00, 1.00)</div>
+    </div>
+    <div style="width: 1px; height: 24px; background: #eee;"></div>
+    <div class="info-item">
+      <div class="info-label">MIN VALUE f(a,b)</div>
+      <div class="info-val" style="color: #e65100;" id="val-min-f">2.00</div>
+    </div>
+    <div style="width: 1px; height: 24px; background: #eee;"></div>
+    <div class="info-item">
+      <div class="info-label">LAMBDA λ = df/dk</div>
+      <div class="info-val" style="color: #d32f2f;" id="val-lambda">2.00</div>
+    </div>
+  </div>
+  <div class="control-panel">
+    <div class="control-group">
+      <span class="control-label">Constraint Parameter k:</span>
+      <input type="range" id="k-slider" min="-3.0" max="3.0" step="0.1" value="2.0">
+      <span class="num-box" id="k-val-box">2.0</span>
+    </div>
+    <label class="toggle"><input type="checkbox" id="toggle-contour" checked> 等高線を表示</label>
+    <label class="toggle"><input type="checkbox" id="toggle-lift" checked> 曲面上にも表示</label>
+    <button id="reset-view">視点をリセット</button>
+  </div>
+</div>
+
+<script>
+  const container = document.getElementById('canvas-container');
+  let scene, camera, renderer, controls;
+  let planeMesh, intersectionLine, optPointMesh, optPointXYMesh, constraintLineXY;
+  const contourGroupXY = new THREE.Group();   // xy平面上の等高線
+  const contourGroupLift = new THREE.Group(); // 曲面上（高さ z=c）の等高線
+
+  // 曲面は半径 R の円盤上で描画（最大の高さは R² = 6.25）
+  const R = 2.5;
+  const ZMAX = R * R;
+  // 等高線の値 c（z = c の高さ ⇔ 半径 √c の円）
+  const contourLevels = [0.5, 1, 2, 3, 4, 5, 6];
+
+  // 初期視点：曲面全体（高さ 0〜ZMAX）の中心を注視
+  const VIEW_TARGET = new THREE.Vector3(0, 2.6, 0);
+  const VIEW_POS = new THREE.Vector3(7.5, 6.5, 10.5);
+
+  function init() {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xffffff);
+
+    camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+    camera.position.copy(VIEW_POS);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    container.appendChild(renderer.domElement);
+
+    controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.target.copy(VIEW_TARGET);
+    controls.update();
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    dirLight.position.set(5, 10, 7);
+    scene.add(dirLight);
+
+    addHelpers();
+    buildSurface();
+    buildContours();
+    createDynamicObjects();
+    updateDynamicObjects(2.0);
+
+    window.addEventListener('resize', onWindowResize);
+    setupUI();
+    animate();
+  }
+
+  function addHelpers() {
+    const axesHelper = new THREE.AxesHelper(3.0);
+    const colors = axesHelper.geometry.attributes.color;
+    for (let i = 0; i < colors.count; i++) {
+      colors.setXYZ(i, 0, 0, 0); // 軸を黒色に
+    }
+    colors.needsUpdate = true;
+    scene.add(axesHelper);
+
+    const grid = new THREE.GridHelper(6, 12, 0xdddddd, 0xeeeeee);
+    grid.position.y = 0; // xy平面上 (z=0)
+    scene.add(grid);
+  }
+
+  function buildSurface() {
+    // 断面 (r, r²) を y 軸まわりに回転させて放物面 z = x² + y² を作る
+    const profile = [];
+    const N = 60;
+    for (let i = 0; i <= N; i++) {
+      const r = (R * i) / N;
+      profile.push(new THREE.Vector2(r, r * r));
+    }
+    const geometry = new THREE.LatheGeometry(profile, 96);
+
+    const pos = geometry.attributes.position;
+    const colors = [];
+    for (let i = 0; i < pos.count; i++) {
+      const z = pos.getY(i);
+      const norm = Math.min(1, z / ZMAX);
+      const hue = (1 - norm) * 0.7; // HSL: 青〜赤
+      const c = new THREE.Color().setHSL(hue, 0.8, 0.5);
+      colors.push(c.r, c.g, c.b);
+    }
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshPhongMaterial({
+      vertexColors: true, side: THREE.DoubleSide, shininess: 30, transparent: true, opacity: 0.6, depthWrite: false
+    }));
+    scene.add(mesh);
+  }
+
+  // 半径 r・高さ h の円（xz 平面に平行、three.js の y が数学の z）
+  function circleLine(r, h, material) {
+    const pts = [];
+    const seg = 128;
+    for (let i = 0; i <= seg; i++) {
+      const th = (2 * Math.PI * i) / seg;
+      pts.push(new THREE.Vector3(r * Math.cos(th), h, r * Math.sin(th)));
+    }
+    return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), material);
+  }
+
+  function buildContours() {
+    const matXY = new THREE.LineBasicMaterial({ color: 0x1a9c6b });
+    const matLift = new THREE.LineBasicMaterial({ color: 0x1a9c6b, transparent: true, opacity: 0.55 });
+
+    contourLevels.forEach(c => {
+      const r = Math.sqrt(c);
+      // xy 平面上の等高線 x² + y² = c（z=0 のすぐ上に描画）
+      contourGroupXY.add(circleLine(r, 0.005, matXY));
+      // 曲面上の対応する曲線（高さ z = c）
+      contourGroupLift.add(circleLine(r, c, matLift));
+    });
+    scene.add(contourGroupXY);
+    scene.add(contourGroupLift);
+  }
+
+  function createDynamicObjects() {
+    // 1. 制約平面 x + y = k （垂直面）: 高さ 0〜ZMAX+0.5 をカバー
+    const planeH = ZMAX + 0.5;
+    const planeGeo = new THREE.PlaneGeometry(6, planeH);
+    const planeMat = new THREE.MeshStandardMaterial({
+      color: 0x2196f3, side: THREE.DoubleSide, transparent: true, opacity: 0.3, depthWrite: false
+    });
+    planeMesh = new THREE.Mesh(planeGeo, planeMat);
+    planeMesh.rotation.y = Math.PI / 4; // x + y = k に合わせる
+    planeMesh.userData.height = planeH;
+    scene.add(planeMesh);
+
+    // 2. 交線（赤色の線）
+    const lineMat = new THREE.LineBasicMaterial({ color: 0xd32f2f });
+    intersectionLine = new THREE.Line(new THREE.BufferGeometry(), lineMat);
+    scene.add(intersectionLine);
+
+    // 3. xy平面上の制約直線 x + y = k （青の破線）
+    const dashedMat = new THREE.LineDashedMaterial({ color: 0x1976d2, dashSize: 0.15, gapSize: 0.08 });
+    constraintLineXY = new THREE.Line(new THREE.BufferGeometry(), dashedMat);
+    scene.add(constraintLineXY);
+
+    // 4. 極小点 (a, b, f(a,b)) - オレンジ色の球体
+    const sphereGeo = new THREE.SphereGeometry(0.12, 32, 32);
+    const sphereMat = new THREE.MeshPhongMaterial({ color: 0xff6f00, emissive: 0xff3d00, emissiveIntensity: 0.5 });
+    optPointMesh = new THREE.Mesh(sphereGeo, sphereMat);
+    scene.add(optPointMesh);
+
+    // 5. xy平面上の最適点 (a, b, 0) - 青色の球体
+    const sphereXYGeo = new THREE.SphereGeometry(0.08, 32, 32);
+    const sphereXYMat = new THREE.MeshPhongMaterial({ color: 0x1976d2 });
+    optPointXYMesh = new THREE.Mesh(sphereXYGeo, sphereXYMat);
+    scene.add(optPointXYMesh);
+  }
+
+  function updateDynamicObjects(k) {
+    const a = k / 2.0;
+    const b = k / 2.0;
+    const minF = a * a + b * b; // k^2 / 2
+    const lambda = k;
+
+    // 平面の位置設定: x + y = k の中心は (k/2, 高さ, k/2)。下端が z=0 になるよう配置
+    planeMesh.position.set(a, planeMesh.userData.height / 2, b);
+
+    // 交線（曲面と制約平面の交わりの曲線）の計算
+    // 直線上の点は x²+y² = k²/2 + t² なので、円盤 r ≤ R に収まる範囲のみ描画
+    const pts = [];
+    const ptsXY = [];
+    for (let t = -3.0; t <= 3.0; t += 0.02) {
+      const x = a + t / Math.SQRT2;
+      const y = b - t / Math.SQRT2;
+      const z = x * x + y * y;
+      if (z <= ZMAX) {
+        pts.push(new THREE.Vector3(x, z, y));
+        ptsXY.push(new THREE.Vector3(x, 0.01, y));
+      }
+    }
+
+    intersectionLine.geometry.dispose();
+    intersectionLine.geometry = new THREE.BufferGeometry().setFromPoints(pts);
+
+    constraintLineXY.geometry.dispose();
+    constraintLineXY.geometry = new THREE.BufferGeometry().setFromPoints(ptsXY);
+    constraintLineXY.computeLineDistances();
+
+    // 最適点 (a, b, f(a,b)) の位置変更
+    optPointMesh.position.set(a, minF, b);
+    optPointXYMesh.position.set(a, 0.02, b);
+
+    // 情報パネルの更新
+    document.getElementById('val-constraint').textContent = `x + y = ${k.toFixed(1)}`;
+    document.getElementById('val-opt-pt').textContent = `(${a.toFixed(2)}, ${b.toFixed(2)})`;
+    document.getElementById('val-min-f').textContent = minF.toFixed(2);
+    document.getElementById('val-lambda').textContent = lambda.toFixed(2);
+  }
+
+  function setupUI() {
+    const slider = document.getElementById('k-slider');
+    slider.addEventListener('input', (e) => {
+      const k = parseFloat(e.target.value);
+      document.getElementById('k-val-box').textContent = k.toFixed(1);
+      updateDynamicObjects(k);
+    });
+
+    const tContour = document.getElementById('toggle-contour');
+    const tLift = document.getElementById('toggle-lift');
+    const refresh = () => {
+      contourGroupXY.visible = tContour.checked;
+      contourGroupLift.visible = tContour.checked && tLift.checked;
+      tLift.disabled = !tContour.checked;
+    };
+    tContour.addEventListener('change', refresh);
+    tLift.addEventListener('change', refresh);
+    refresh();
+
+    document.getElementById('reset-view').addEventListener('click', () => {
+      camera.position.copy(VIEW_POS);
+      controls.target.copy(VIEW_TARGET);
+      controls.update();
+    });
+  }
+
+  function onWindowResize() {
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+
+  init();
+</script>
+
+</body>
+</html>
